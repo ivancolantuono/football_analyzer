@@ -1,7 +1,9 @@
 import streamlit as st
-import requests
 import pandas as pd
-from datetime import datetime, date
+from datetime import date, datetime
+
+from curl_cffi import requests
+
 
 # ============================================================
 # CONFIGURAZIONE
@@ -13,21 +15,36 @@ st.set_page_config(
     layout="wide"
 )
 
-BASE_URL = "https://www.sofascore.com/api/v1"
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/153.0.0.0 Safari/537.36"
-    ),
-    "Accept": "application/json,text/plain,*/*",
-    "Referer": "https://www.sofascore.com/",
-}
+BASE_URL = "https://api.sofascore.com/api/v1"
 
 
 # ============================================================
-# FUNZIONI SOFASCORE
+# SESSIONE SOFASCORE
+# ============================================================
+
+@st.cache_resource
+def get_session():
+
+    session = requests.Session(
+        impersonate="chrome"
+    )
+
+    session.headers.update({
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://www.sofascore.com/",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/140.0.0.0 Safari/537.36"
+        )
+    })
+
+    return session
+
+
+# ============================================================
+# FUNZIONE GENERALE SOFASCORE
 # ============================================================
 
 def sofascore_get(endpoint):
@@ -36,25 +53,27 @@ def sofascore_get(endpoint):
 
     try:
 
-        response = requests.get(
+        session = get_session()
+
+        response = session.get(
             url,
-            headers=HEADERS,
             timeout=20
         )
 
         if response.status_code != 200:
+
             return None, response.status_code
 
         return response.json(), 200
-
-    except requests.exceptions.RequestException as e:
-
-        return None, str(e)
 
     except Exception as e:
 
         return None, str(e)
 
+
+# ============================================================
+# PARTITE DEL GIORNO
+# ============================================================
 
 @st.cache_data(ttl=300)
 def get_events(selected_date):
@@ -67,20 +86,28 @@ def get_events(selected_date):
     return sofascore_get(endpoint)
 
 
+# ============================================================
+# DETTAGLI PARTITA
+# ============================================================
+
 @st.cache_data(ttl=300)
 def get_event_details(event_id):
 
-    endpoint = f"/event/{event_id}"
+    return sofascore_get(
+        f"/event/{event_id}"
+    )
 
-    return sofascore_get(endpoint)
 
+# ============================================================
+# STATISTICHE PARTITA
+# ============================================================
 
 @st.cache_data(ttl=300)
 def get_event_statistics(event_id):
 
-    endpoint = f"/event/{event_id}/statistics"
-
-    return sofascore_get(endpoint)
+    return sofascore_get(
+        f"/event/{event_id}/statistics"
+    )
 
 
 # ============================================================
@@ -90,24 +117,33 @@ def get_event_statistics(event_id):
 def get_team_name(team):
 
     if not team:
-        return "?"
+        return "N/D"
 
-    return team.get("name", "?")
+    return team.get(
+        "name",
+        "N/D"
+    )
 
 
 def get_tournament_name(event):
 
-    tournament = event.get("tournament", {})
+    tournament = event.get(
+        "tournament",
+        {}
+    )
 
     return tournament.get(
         "name",
-        "Campionato sconosciuto"
+        "N/D"
     )
 
 
 def get_country_name(event):
 
-    tournament = event.get("tournament", {})
+    tournament = event.get(
+        "tournament",
+        {}
+    )
 
     category = tournament.get(
         "category",
@@ -116,29 +152,35 @@ def get_country_name(event):
 
     return category.get(
         "name",
-        "?"
+        "N/D"
     )
 
 
-def get_event_time(event):
+def get_match_datetime(event):
 
-    timestamp = event.get("startTimestamp")
+    timestamp = event.get(
+        "startTimestamp"
+    )
 
     if not timestamp:
-        return "?"
+        return "N/D"
 
     try:
 
-        return datetime.fromtimestamp(
+        dt = datetime.fromtimestamp(
             timestamp
-        ).strftime("%H:%M")
+        )
 
-    except:
+        return dt.strftime(
+            "%H:%M"
+        )
 
-        return "?"
+    except Exception:
+
+        return "N/D"
 
 
-def get_status(event):
+def get_match_status(event):
 
     status = event.get(
         "status",
@@ -147,7 +189,7 @@ def get_status(event):
 
     return status.get(
         "description",
-        "?"
+        "N/D"
     )
 
 
@@ -172,24 +214,158 @@ def get_score(event):
     )
 
     if home is None or away is None:
+
         return "-"
 
     return f"{home} - {away}"
 
 
 # ============================================================
-# HEADER
+# ESTRAZIONE PARTITE
 # ============================================================
 
-st.title("⚽ Football Analyzer")
+def build_matches_dataframe(events):
 
-st.markdown(
-    "### Analisi automatica delle partite"
+    rows = []
+
+    for event in events:
+
+        home_team = event.get(
+            "homeTeam",
+            {}
+        )
+
+        away_team = event.get(
+            "awayTeam",
+            {}
+        )
+
+        rows.append({
+
+            "ID": event.get(
+                "id"
+            ),
+
+            "Ora": get_match_datetime(
+                event
+            ),
+
+            "Paese": get_country_name(
+                event
+            ),
+
+            "Campionato": get_tournament_name(
+                event
+            ),
+
+            "Casa": get_team_name(
+                home_team
+            ),
+
+            "Trasferta": get_team_name(
+                away_team
+            ),
+
+            "Stato": get_match_status(
+                event
+            ),
+
+            "Risultato": get_score(
+                event
+            )
+        })
+
+    if not rows:
+
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+
+    return df
+
+
+# ============================================================
+# STATISTICHE
+# ============================================================
+
+def parse_statistics(data):
+
+    if not data:
+        return pd.DataFrame()
+
+    rows = []
+
+    periods = data.get(
+        "statistics",
+        []
+    )
+
+    for period in periods:
+
+        period_name = period.get(
+            "period",
+            "N/D"
+        )
+
+        groups = period.get(
+            "groups",
+            []
+        )
+
+        for group in groups:
+
+            group_name = group.get(
+                "groupName",
+                "N/D"
+            )
+
+            statistics_items = group.get(
+                "statisticsItems",
+                []
+            )
+
+            for item in statistics_items:
+
+                rows.append({
+
+                    "Periodo": period_name,
+
+                    "Categoria": group_name,
+
+                    "Statistica": item.get(
+                        "name",
+                        "N/D"
+                    ),
+
+                    "Casa": item.get(
+                        "home",
+                        ""
+                    ),
+
+                    "Trasferta": item.get(
+                        "away",
+                        ""
+                    )
+                })
+
+    return pd.DataFrame(rows)
+
+
+# ============================================================
+# TITOLO
+# ============================================================
+
+st.title(
+    "⚽ Football Analyzer"
 )
 
-st.caption(
-    "Sorgente dati: Sofascore • "
-    "nessuna API key richiesta"
+st.markdown(
+    """
+    ### Analisi statistica delle partite di calcio
+
+    Dati raccolti online e utilizzati per costruire
+    successivamente le probabilità dei vari mercati.
+    """
 )
 
 
@@ -197,19 +373,21 @@ st.caption(
 # SIDEBAR
 # ============================================================
 
-st.sidebar.header("⚙️ Filtri")
+st.sidebar.header(
+    "⚙️ Impostazioni"
+)
 
 selected_date = st.sidebar.date_input(
-    "📅 Data",
+    "Data partite",
     value=date.today()
 )
 
 if st.sidebar.button(
-    "🔄 Aggiorna dati",
-    use_container_width=True
+    "🔄 Aggiorna dati"
 ):
 
     st.cache_data.clear()
+
     st.rerun()
 
 
@@ -218,32 +396,50 @@ if st.sidebar.button(
 # ============================================================
 
 with st.spinner(
-    "Recupero partite da Sofascore..."
+    "Recupero partite da SofaScore..."
 ):
 
-    data, status_code = get_events(
-        selected_date.isoformat()
+    data, status = get_events(
+        selected_date.strftime(
+            "%Y-%m-%d"
+        )
     )
 
+
+# ============================================================
+# GESTIONE ERRORE
+# ============================================================
 
 if data is None:
 
     st.error(
-        "❌ Non riesco a recuperare i dati da Sofascore."
+        "❌ Non riesco a recuperare "
+        "i dati da SofaScore."
+    )
+
+    st.write(
+        f"Risposta HTTP: {status}"
     )
 
     st.info(
-        f"Risposta HTTP: {status_code}"
+        """
+        Se compare ancora 403, il server che
+        ospita Streamlit potrebbe essere bloccato
+        dal sistema di protezione di SofaScore.
+        """
     )
 
     st.stop()
 
 
+# ============================================================
+# ESTRAZIONE EVENTI
+# ============================================================
+
 events = data.get(
     "events",
     []
 )
-
 
 if not events:
 
@@ -255,166 +451,108 @@ if not events:
 
 
 # ============================================================
-# CREAZIONE DATAFRAME
+# DATAFRAME
 # ============================================================
 
-rows = []
-
-for event in events:
-
-    home = get_team_name(
-        event.get("homeTeam")
-    )
-
-    away = get_team_name(
-        event.get("awayTeam")
-    )
-
-    tournament = get_tournament_name(
-        event
-    )
-
-    country = get_country_name(
-        event
-    )
-
-    rows.append({
-
-        "ID": event.get("id"),
-
-        "Ora": get_event_time(
-            event
-        ),
-
-        "Nazione": country,
-
-        "Campionato": tournament,
-
-        "Casa": home,
-
-        "Trasferta": away,
-
-        "Stato": get_status(
-            event
-        ),
-
-        "Risultato": get_score(
-            event
-        )
-
-    })
-
-
-df = pd.DataFrame(rows)
+df = build_matches_dataframe(
+    events
+)
 
 
 # ============================================================
 # FILTRI
 # ============================================================
 
-st.sidebar.markdown("---")
-
-countries = sorted(
-    df["Nazione"]
-    .dropna()
-    .unique()
-    .tolist()
+st.subheader(
+    "🔎 Filtri"
 )
 
-selected_country = st.sidebar.selectbox(
-    "🌍 Nazione",
-    ["Tutte"] + countries
-)
+col1, col2 = st.columns(2)
 
 
-filtered = df.copy()
+with col1:
+
+    countries = sorted(
+        df["Paese"]
+        .dropna()
+        .unique()
+        .tolist()
+    )
+
+    selected_country = st.selectbox(
+        "Paese",
+        ["Tutti"] + countries
+    )
 
 
-if selected_country != "Tutte":
+with col2:
 
-    filtered = filtered[
-        filtered["Nazione"] ==
-        selected_country
+    tournaments = sorted(
+        df["Campionato"]
+        .dropna()
+        .unique()
+        .tolist()
+    )
+
+    selected_tournament = st.selectbox(
+        "Campionato",
+        ["Tutti"] + tournaments
+    )
+
+
+filtered_df = df.copy()
+
+
+if selected_country != "Tutti":
+
+    filtered_df = filtered_df[
+        filtered_df["Paese"]
+        == selected_country
     ]
-
-
-tournaments = sorted(
-    filtered["Campionato"]
-    .dropna()
-    .unique()
-    .tolist()
-)
-
-
-selected_tournament = st.sidebar.selectbox(
-    "🏆 Campionato",
-    ["Tutti"] + tournaments
-)
 
 
 if selected_tournament != "Tutti":
 
-    filtered = filtered[
-        filtered["Campionato"] ==
-        selected_tournament
+    filtered_df = filtered_df[
+        filtered_df["Campionato"]
+        == selected_tournament
     ]
 
 
 # ============================================================
-# RIEPILOGO
+# NUMERO PARTITE
 # ============================================================
 
-c1, c2, c3 = st.columns(3)
-
-with c1:
-
-    st.metric(
-        "Partite trovate",
-        len(filtered)
-    )
-
-with c2:
-
-    st.metric(
-        "Campionati",
-        filtered["Campionato"].nunique()
-    )
-
-with c3:
-
-    st.metric(
-        "Nazioni",
-        filtered["Nazione"].nunique()
-    )
-
-
-st.markdown("---")
-
-
-# ============================================================
-# ELENCO PARTITE
-# ============================================================
-
-st.subheader(
-    f"📅 Partite del {selected_date.strftime('%d/%m/%Y')}"
+st.metric(
+    "Partite trovate",
+    len(filtered_df)
 )
 
 
-display_df = filtered[
-    [
-        "Ora",
-        "Nazione",
-        "Campionato",
-        "Casa",
-        "Trasferta",
-        "Stato",
-        "Risultato"
-    ]
+# ============================================================
+# TABELLA
+# ============================================================
+
+st.subheader(
+    "📋 Partite"
+)
+
+display_columns = [
+
+    "Ora",
+    "Paese",
+    "Campionato",
+    "Casa",
+    "Trasferta",
+    "Stato",
+    "Risultato"
+
 ]
 
-
 st.dataframe(
-    display_df,
+    filtered_df[
+        display_columns
+    ],
     use_container_width=True,
     hide_index=True
 )
@@ -424,185 +562,170 @@ st.dataframe(
 # SELEZIONE PARTITA
 # ============================================================
 
-st.markdown("---")
-
 st.subheader(
-    "🔎 Analizza una partita"
+    "⚽ Analizza partita"
 )
 
+if len(filtered_df) > 0:
 
-if len(filtered) == 0:
+    match_options = {}
 
-    st.warning(
-        "Nessuna partita corrisponde ai filtri."
-    )
+    for _, row in filtered_df.iterrows():
 
-    st.stop()
+        label = (
+            f"{row['Ora']} | "
+            f"{row['Casa']} - "
+            f"{row['Trasferta']} | "
+            f"{row['Campionato']}"
+        )
+
+        match_options[label] = row["ID"]
 
 
-match_options = {}
-
-for _, row in filtered.iterrows():
-
-    label = (
-        f"{row['Ora']} | "
-        f"{row['Campionato']} | "
-        f"{row['Casa']} - "
-        f"{row['Trasferta']}"
-    )
-
-    match_options[label] = int(
-        row["ID"]
+    selected_match = st.selectbox(
+        "Seleziona partita",
+        list(match_options.keys())
     )
 
 
-selected_match = st.selectbox(
-    "Seleziona partita",
-    list(match_options.keys())
-)
+    event_id = match_options[
+        selected_match
+    ]
 
 
-event_id = match_options[
-    selected_match
-]
+    # ========================================================
+    # DETTAGLI
+    # ========================================================
 
+    with st.spinner(
+        "Recupero dettagli partita..."
+    ):
 
-# ============================================================
-# DETTAGLIO PARTITA
-# ============================================================
-
-with st.spinner(
-    "Recupero dettagli partita..."
-):
-
-    event_data, event_status = (
-        get_event_details(event_id)
-    )
-
-
-if event_data is None:
-
-    st.error(
-        f"Impossibile recuperare il dettaglio "
-        f"della partita. HTTP: {event_status}"
-    )
-
-else:
-
-    event = event_data.get(
-        "event",
-        event_data
-    )
-
-    home_team = get_team_name(
-        event.get("homeTeam")
-    )
-
-    away_team = get_team_name(
-        event.get("awayTeam")
-    )
-
-
-    st.markdown("---")
-
-    st.subheader(
-        f"⚽ {home_team}  -  {away_team}"
-    )
-
-
-    col1, col2, col3 = st.columns(3)
-
-
-    with col1:
-
-        st.metric(
-            "Campionato",
-            get_tournament_name(event)
+        details, details_status = (
+            get_event_details(
+                event_id
+            )
         )
 
 
-    with col2:
+    if details is None:
 
-        st.metric(
-            "Ora",
-            get_event_time(event)
+        st.warning(
+            f"Impossibile recuperare "
+            f"i dettagli. Risposta: "
+            f"{details_status}"
+        )
+
+    else:
+
+        event = details.get(
+            "event",
+            {}
+        )
+
+        home_team = get_team_name(
+            event.get(
+                "homeTeam",
+                {}
+            )
+        )
+
+        away_team = get_team_name(
+            event.get(
+                "awayTeam",
+                {}
+            )
+        )
+
+        score = get_score(
+            event
         )
 
 
-    with col3:
+        st.markdown(
+            f"""
+            ## {home_team} 🆚 {away_team}
 
-        st.metric(
-            "Stato",
-            get_status(event)
+            ### Risultato: **{score}**
+            """
         )
 
 
-    # --------------------------------------------------------
-    # RISULTATO
-    # --------------------------------------------------------
-
-    home_score = event.get(
-        "homeScore",
-        {}
-    )
-
-    away_score = event.get(
-        "awayScore",
-        {}
-    )
-
-    score_home = home_score.get(
-        "current",
-        "-"
-    )
-
-    score_away = away_score.get(
-        "current",
-        "-"
-    )
+        col1, col2, col3 = st.columns(3)
 
 
-    st.markdown(
-        f"## {score_home}  -  {score_away}"
-    )
+        with col1:
+
+            st.write(
+                "**Campionato**"
+            )
+
+            st.write(
+                get_tournament_name(
+                    event
+                )
+            )
 
 
-    # --------------------------------------------------------
+        with col2:
+
+            st.write(
+                "**Paese**"
+            )
+
+            st.write(
+                get_country_name(
+                    event
+                )
+            )
+
+
+        with col3:
+
+            st.write(
+                "**Stato**"
+            )
+
+            st.write(
+                get_match_status(
+                    event
+                )
+            )
+
+
+    # ========================================================
     # STATISTICHE
-    # --------------------------------------------------------
-
-    st.markdown("---")
+    # ========================================================
 
     st.subheader(
-        "📊 Statistiche partita"
+        "📊 Statistiche"
     )
-
 
     with st.spinner(
         "Recupero statistiche..."
     ):
 
-        stats_data, stats_status = (
-            get_event_statistics(event_id)
+        statistics, statistics_status = (
+            get_event_statistics(
+                event_id
+            )
         )
 
 
-    if stats_data is None:
+    if statistics is None:
 
-        st.info(
-            "Le statistiche dettagliate "
-            "non sono disponibili per questa partita."
+        st.warning(
+            f"Statistiche non disponibili. "
+            f"Risposta: {statistics_status}"
         )
 
     else:
 
-        statistics = stats_data.get(
-            "statistics",
-            []
+        stats_df = parse_statistics(
+            statistics
         )
 
-
-        if not statistics:
+        if stats_df.empty:
 
             st.info(
                 "Nessuna statistica disponibile."
@@ -610,104 +733,44 @@ else:
 
         else:
 
-            for period in statistics:
-
-                period_name = period.get(
-                    "period",
-                    "ALL"
-                )
-
-                if period_name == "ALL":
-
-                    title = "Partita"
-
-                elif period_name == "1ST":
-
-                    title = "Primo tempo"
-
-                elif period_name == "2ND":
-
-                    title = "Secondo tempo"
-
-                else:
-
-                    title = period_name
-
-
-                with st.expander(
-                    f"📊 {title}",
-                    expanded=(
-                        period_name == "ALL"
-                    )
-                ):
-
-                    groups = period.get(
-                        "groups",
-                        []
-                    )
-
-
-                    for group in groups:
-
-                        group_name = group.get(
-                            "groupName",
-                            "Statistiche"
-                        )
-
-                        st.markdown(
-                            f"**{group_name}**"
-                        )
-
-
-                        stat_rows = []
-
-
-                        for item in group.get(
-                            "statisticsItems",
-                            []
-                        ):
-
-                            stat_rows.append({
-
-                                "Statistica":
-                                    item.get(
-                                        "name",
-                                        "?"
-                                    ),
-
-                                home_team:
-                                    item.get(
-                                        "home",
-                                        "-"
-                                    ),
-
-                                away_team:
-                                    item.get(
-                                        "away",
-                                        "-"
-                                    )
-
-                            })
-
-
-                        if stat_rows:
-
-                            st.dataframe(
-                                pd.DataFrame(
-                                    stat_rows
-                                ),
-                                use_container_width=True,
-                                hide_index=True
-                            )
+            st.dataframe(
+                stats_df,
+                use_container_width=True,
+                hide_index=True
+            )
 
 
 # ============================================================
-# PROSSIMO MODULO
+# FUTURO MODULO PROBABILITÀ
 # ============================================================
 
-st.markdown("---")
+st.divider()
+
+st.subheader(
+    "🧠 Modulo probabilità"
+)
 
 st.info(
-    "🚧 Modulo probabilità in sviluppo: "
-    "1X2 • Over/Under • Goal/No Goal"
+    """
+    Prossimo modulo:
+
+    • Probabilità 1X2
+    • Doppia chance
+    • Over / Under
+    • Goal / No Goal
+    • Over 0.5
+    • Over 1.5
+    • Over 2.5
+    • Over 3.5
+    • Over 4.5
+    • Gol casa
+    • Gol trasferta
+    • Clean sheet
+    • Risultato esatto
+    • Probabilità primo tempo
+    • Probabilità secondo tempo
+    • Forma recente
+    • Media gol fatti/subiti
+    • Statistiche casa/trasferta
+    """
 )
