@@ -1,68 +1,82 @@
 import streamlit as st
-from curl_cffi import requests
+from playwright.sync_api import sync_playwright
 
 st.set_page_config(
-    page_title="Test SofaScore",
+    page_title="Football Analyzer",
     page_icon="⚽"
 )
 
-st.title("⚽ Test connessione SofaScore")
+st.title("⚽ Test SofaScore - Browser")
 
-URL = "https://api.sofascore.com/api/v1/sport/football/scheduled-events/2026-09-16"
+url = "https://www.sofascore.com/it/football"
 
-st.write("URL utilizzato:")
-st.code(URL)
+if st.button("🌐 Apri SofaScore"):
 
-try:
+    with st.spinner("Apertura di SofaScore..."):
 
-    session = requests.Session(
-        impersonate="chrome"
-    )
+        try:
 
-    response = session.get(
-        URL,
-        timeout=30
-    )
+            with sync_playwright() as p:
 
-    st.write("Codice HTTP:")
-    st.code(response.status_code)
+                browser = p.chromium.launch(
+                    headless=True
+                )
 
-    st.write("Headers ricevuti:")
-    st.json(dict(response.headers))
+                page = browser.new_page(
+                    viewport={
+                        "width": 1366,
+                        "height": 768
+                    }
+                )
 
-    if response.status_code == 200:
+                page.goto(
+                    url,
+                    wait_until="domcontentloaded",
+                    timeout=60000
+                )
 
-        data = response.json()
+                st.success(
+                    "✅ SofaScore è stato aperto"
+                )
 
-        st.success("✅ CONNESSIONE SOFASCORE RIUSCITA")
+                st.write(
+                    "Titolo pagina:"
+                )
 
-        st.write(
-            "Numero partite:",
-            len(data.get("events", []))
-        )
+                st.code(
+                    page.title()
+                )
 
-        st.json(
-            data
-        )
+                st.write(
+                    "URL:"
+                )
 
-    else:
+                st.code(
+                    page.url
+                )
 
-        st.error(
-            f"❌ SofaScore ha restituito HTTP {response.status_code}"
-        )
+                # Aspettiamo il caricamento
+                page.wait_for_timeout(5000)
 
-        st.write(
-            "Risposta del server:"
-        )
+                # Testo della pagina
+                text = page.locator(
+                    "body"
+                ).inner_text()
 
-        st.code(
-            response.text[:5000]
-        )
+                st.write(
+                    "Testo recuperato dalla pagina:"
+                )
 
-except Exception as e:
+                st.text(
+                    text[:10000]
+                )
 
-    st.error(
-        "❌ ERRORE PYTHON"
-    )
+                browser.close()
 
-    st.exception(e)
+        except Exception as e:
+
+            st.error(
+                "❌ Errore Playwright"
+            )
+
+            st.exception(e)
