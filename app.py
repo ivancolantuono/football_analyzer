@@ -1635,9 +1635,9 @@ elif page == "Analisi partita":
 # VALUE SCANNER
 # ============================================================
 
-elif page == "Value Scanner":
+elif page == "Scanner":
 
-    st.title("🎯 VALUE SCANNER")
+    st.title("🎯 SCANNER")
 
     st.write(
         "Ricerca automatica dei mercati nei campionati "
