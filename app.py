@@ -1,82 +1,232 @@
 import streamlit as st
 from playwright.sync_api import sync_playwright
 
+
+# ============================================================
+# CONFIGURAZIONE
+# ============================================================
+
 st.set_page_config(
     page_title="Football Analyzer",
-    page_icon="⚽"
+    page_icon="⚽",
+    layout="wide"
 )
 
-st.title("⚽ Test SofaScore - Browser")
 
-url = "https://www.sofascore.com/it/football"
+# ============================================================
+# TITOLO
+# ============================================================
 
-if st.button("🌐 Apri SofaScore"):
+st.title("⚽ Football Analyzer")
 
-    with st.spinner("Apertura di SofaScore..."):
+st.subheader("Test connessione SofaScore")
 
-        try:
+st.write(
+    "Questa versione verifica se Streamlit Cloud "
+    "riesce ad aprire SofaScore tramite Chromium."
+)
 
-            with sync_playwright() as p:
 
-                browser = p.chromium.launch(
-                    headless=True
+# ============================================================
+# URL SOFASCORE
+# ============================================================
+
+URL = "https://www.sofascore.com/it/football"
+
+
+# ============================================================
+# PULSANTE
+# ============================================================
+
+if st.button("🌐 Avvia test SofaScore"):
+
+    st.info("Avvio Chromium...")
+
+    try:
+
+        # ----------------------------------------------------
+        # AVVIO PLAYWRIGHT
+        # ----------------------------------------------------
+
+        with sync_playwright() as p:
+
+            browser = p.chromium.launch(
+                executable_path="/usr/bin/chromium",
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-setuid-sandbox",
+                    "--disable-software-rasterizer"
+                ]
+            )
+
+            st.success("✅ Chromium avviato correttamente")
+
+
+            # ------------------------------------------------
+            # CREAZIONE PAGINA
+            # ------------------------------------------------
+
+            page = browser.new_page(
+                viewport={
+                    "width": 1366,
+                    "height": 768
+                },
+
+                user_agent=(
+                    "Mozilla/5.0 (X11; Linux x86_64) "
+                    "AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) "
+                    "Chrome/140.0.0.0 Safari/537.36"
                 )
+            )
 
-                page = browser.new_page(
-                    viewport={
-                        "width": 1366,
-                        "height": 768
-                    }
-                )
 
-                page.goto(
-                    url,
-                    wait_until="domcontentloaded",
-                    timeout=60000
-                )
+            # ------------------------------------------------
+            # APERTURA SOFASCORE
+            # ------------------------------------------------
 
-                st.success(
-                    "✅ SofaScore è stato aperto"
-                )
+            st.info("Apertura SofaScore...")
+
+            response = page.goto(
+                URL,
+                wait_until="domcontentloaded",
+                timeout=60000
+            )
+
+
+            # ------------------------------------------------
+            # RISPOSTA HTTP
+            # ------------------------------------------------
+
+            if response:
 
                 st.write(
-                    "Titolo pagina:"
+                    "Codice HTTP ricevuto:"
                 )
 
                 st.code(
-                    page.title()
+                    str(response.status)
                 )
 
-                st.write(
-                    "URL:"
+            else:
+
+                st.warning(
+                    "SofaScore non ha restituito "
+                    "una risposta HTTP."
                 )
 
-                st.code(
-                    page.url
-                )
 
-                # Aspettiamo il caricamento
-                page.wait_for_timeout(5000)
+            # ------------------------------------------------
+            # INFORMAZIONI PAGINA
+            # ------------------------------------------------
 
-                # Testo della pagina
+            st.write("URL finale:")
+
+            st.code(
+                page.url
+            )
+
+
+            st.write("Titolo pagina:")
+
+            st.code(
+                page.title()
+            )
+
+
+            # ------------------------------------------------
+            # ATTESA CARICAMENTO
+            # ------------------------------------------------
+
+            st.info(
+                "Attendo il caricamento dei dati..."
+            )
+
+            page.wait_for_timeout(
+                8000
+            )
+
+
+            # ------------------------------------------------
+            # LETTURA PAGINA
+            # ------------------------------------------------
+
+            try:
+
                 text = page.locator(
                     "body"
-                ).inner_text()
+                ).inner_text(
+                    timeout=15000
+                )
+
+            except Exception:
+
+                text = ""
+
+
+            # ------------------------------------------------
+            # RISULTATO
+            # ------------------------------------------------
+
+            if text:
+
+                st.success(
+                    "✅ Contenuto della pagina recuperato"
+                )
 
                 st.write(
-                    "Testo recuperato dalla pagina:"
+                    "Prime informazioni ricevute:"
                 )
 
                 st.text(
-                    text[:10000]
+                    text[:20000]
                 )
 
-                browser.close()
+            else:
 
-        except Exception as e:
+                st.warning(
+                    "⚠️ La pagina è stata aperta, "
+                    "ma non è stato possibile leggere "
+                    "il contenuto."
+                )
 
-            st.error(
-                "❌ Errore Playwright"
-            )
 
-            st.exception(e)
+            # ------------------------------------------------
+            # SCREENSHOT
+            # ------------------------------------------------
+
+            try:
+
+                screenshot = page.screenshot(
+                    full_page=False
+                )
+
+                st.image(
+                    screenshot,
+                    caption="SofaScore visto da Chromium"
+                )
+
+            except Exception as e:
+
+                st.warning(
+                    f"Screenshot non disponibile: {e}"
+                )
+
+
+            # ------------------------------------------------
+            # CHIUSURA
+            # ------------------------------------------------
+
+            browser.close()
+
+
+    except Exception as e:
+
+        st.error(
+            "❌ Errore durante l'esecuzione di Playwright"
+        )
+
+        st.exception(e)
