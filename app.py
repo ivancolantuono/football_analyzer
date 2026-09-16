@@ -1,3 +1,4 @@
+```python
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -2056,4 +2057,377 @@ elif page == "🔎 Value Scanner":
             "Probabilità minima",
             0.40,
             0.90,
+            0.50,
+            0.01
+        )
+
+    with c2:
+
+        min_value = st.slider(
+            "Value minimo",
+            -0.10,
+            0.30,
+            0.00,
+            0.01
+        )
+
+    with c3:
+
+        max_results = st.number_input(
+            "Risultati da mostrare",
+            5,
+            100,
+            50,
+            5
+        )
+
+    st.markdown(
+        "---"
+    )
+
+    if st.button(
+        "🚀 SCANSIONA TUTTI I CAMPIONATI",
+        use_container_width=True
+    ):
+
+        with st.spinner(
+            "Scarico fixture e analizzo i campionati..."
+        ):
+
+            results, debug = (
+                scan_all_leagues(
+                    min_probability,
+                    min_value
+                )
+            )
+
+        # ----------------------------------------------------
+        # DEBUG RIASSUNTIVO
+        # ----------------------------------------------------
+
+        st.subheader(
+            "🔎 Controllo scansione"
+        )
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+
+        with c1:
+            st.metric(
+                "Fixture",
+                debug["fixtures"]
+            )
+
+        with c2:
+            st.metric(
+                "Future",
+                debug["future"]
+            )
+
+        with c3:
+            st.metric(
+                "Campionati",
+                debug["leagues"]
+            )
+
+        with c4:
+            st.metric(
+                "Match abbinati",
+                debug["matched"]
+            )
+
+        with c5:
+            st.metric(
+                "Con quote",
+                debug["with_odds"]
+            )
+
+        # ----------------------------------------------------
+        # NESSUN RISULTATO
+        # ----------------------------------------------------
+
+        if results.empty:
+
+            st.warning(
+                "⚠️ Nessun segnale trovato."
+            )
+
+            st.write(
+                f"""
+                Fixture scaricate: **{debug['fixtures']}**
+
+                Fixture future: **{debug['future']}**
+
+                Campionati caricati:
+                **{debug['leagues']}**
+
+                Partite abbinate:
+                **{debug['matched']}**
+
+                Partite con quote:
+                **{debug['with_odds']}**
+
+                Segnali:
+                **{debug['signals']}**
+                """
+            )
+
+            st.info(
+                "Prova temporaneamente "
+                "Probabilità minima = 40% "
+                "e Value minimo = -10% "
+                "per verificare i dati."
+            )
+
+        else:
+
+            results = results.head(
+                int(max_results)
+            )
+
+            # ------------------------------------------------
+            # KPI
+            # ------------------------------------------------
+
+            c1, c2, c3, c4 = st.columns(4)
+
+            with c1:
+
+                st.metric(
+                    "Segnali",
+                    len(results)
+                )
+
+            with c2:
+
+                st.metric(
+                    "Value medio",
+                    f"{results['Value'].mean() * 100:.1f}%"
+                )
+
+            with c3:
+
+                st.metric(
+                    "Probabilità media",
+                    f"{results['Probabilità'].mean() * 100:.1f}%"
+                )
+
+            with c4:
+
+                st.metric(
+                    "Quota media",
+                    f"{results['Quota'].mean():.2f}"
+                )
+
+            st.markdown(
+                "---"
+            )
+
+            # ------------------------------------------------
+            # TABELLA
+            # ------------------------------------------------
+
+            display = results.copy()
+
+            display["Probabilità"] = (
+                display["Probabilità"]
+                * 100
+            ).round(1).astype(str) + "%"
+
+            display["Value"] = (
+                display["Value"]
+                * 100
+            ).round(1).astype(str) + "%"
+
+            display["Affidabilità"] = (
+                display["Affidabilità"]
+            ).round(0).astype(int).astype(str) + "%"
+
+            display["Quota"] = (
+                display["Quota"]
+                .round(2)
+            )
+
+            display["Quota equa"] = (
+                display["Quota equa"]
+                .round(2)
+            )
+
+            display["xG casa"] = (
+                display["xG casa"]
+                .round(2)
+            )
+
+            display["xG ospite"] = (
+                display["xG ospite"]
+                .round(2)
+            )
+
+            st.dataframe(
+                display,
+                hide_index=True,
+                use_container_width=True
+            )
+
+            # ------------------------------------------------
+            # TOP SEGNALI
+            # ------------------------------------------------
+
+            st.subheader(
+                "🏆 Migliori segnali"
+            )
+
+            for i, (_, row) in enumerate(
+                results.head(10).iterrows(),
+                start=1
+            ):
+
+                st.markdown(
+                    f"""
+                    <div class="card">
+
+                    <b>#{i} — {row['Partita']}</b>
+
+                    <br>
+
+                    {row['Campionato']}
+
+                    <br><br>
+
+                    <b>Mercato:</b>
+                    {row['Mercato']}
+
+                    &nbsp;&nbsp;
+
+                    <b>Probabilità:</b>
+                    {row['Probabilità'] * 100:.1f}%
+
+                    &nbsp;&nbsp;
+
+                    <b>Quota:</b>
+                    {row['Quota']:.2f}
+
+                    &nbsp;&nbsp;
+
+                    <b>Value:</b>
+                    <span class="value-positive">
+                    +{row['Value'] * 100:.1f}%
+                    </span>
+
+                    <br>
+
+                    xG:
+                    {row['xG casa']:.2f}
+                    -
+                    {row['xG ospite']:.2f}
+
+                    &nbsp;&nbsp;
+
+                    Affidabilità:
+                    {row['Affidabilità']:.0f}%
+
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+
+# ============================================================
+# DEBUG
+# ============================================================
+
+elif page == "🛠️ Debug dati":
+
+    st.header(
+        "🛠️ Debug dati"
+    )
+
+    st.write(
+        """
+        Questa pagina serve per capire esattamente
+        quali dati vengono ricevuti da Football-Data.
+        """
+    )
+
+    if st.button(
+        "🔍 CONTROLLA DATI"
+    ):
+
+        run_debug()
 ```
+
+### `requirements.txt`
+
+Usa solo questo:
+
+```txt
+streamlit
+pandas
+numpy
+requests
+```
+
+### Cosa cambia rispetto a prima
+
+Adesso quando premi **SCANSIONA TUTTI I CAMPIONATI**, non vedrai più semplicemente "nessun risultato".
+
+Vedrai qualcosa del genere:
+
+```text
+🔎 CONTROLLO SCANSIONE
+
+Fixture             250
+Future               82
+Campionati           30
+Match abbinati       64
+Con quote            58
+Segnali              12
+```
+
+Questa informazione è fondamentale.
+
+Se invece vediamo:
+
+```text
+Fixture             250
+Future               82
+Campionati           30
+Match abbinati        0
+Con quote             0
+Segnali               0
+```
+
+allora sappiamo che il problema è **l'abbinamento dei nomi delle squadre**, non il Value.
+
+Se vediamo:
+
+```text
+Fixture             250
+Future               82
+Campionati           30
+Match abbinati       64
+Con quote             0
+Segnali               0
+```
+
+allora il problema sono **le colonne delle quote**.
+
+Se invece:
+
+```text
+Fixture             250
+Future               82
+Campionati           30
+Match abbinati       64
+Con quote            58
+Segnali               0
+```
+
+allora il motore funziona, ma **nessuna partita supera i filtri**.
+
+Questo è molto meglio perché adesso possiamo correggere il punto preciso senza andare a tentativi.
+
+Football-Data conferma inoltre che le fixture future vengono pubblicate con quote 1X2, total goals e Asian handicap e che il file viene aggiornato per gli incontri del weekend e per quelli infrasettimanali.
+
+**Una nota importante:** la lista che abbiamo messo contiene i campionati che Football-Data rende disponibili con questi codici; non sono letteralmente "tutti i campionati del mondo". Il sito indica anche 16 divisioni extra (tra cui Austria, Cina, Danimarca, Norvegia, Svezia, Svizzera ecc.), che possiamo aggiungere subito dopo aver verificato il funzionamento dello scanner.
+
+Dopo aver caricato questo `app.py`, **vai direttamente su `🛠️ Debug dati` e premi `🔍 CONTROLLA DATI`**. Poi su `🔎 Value Scanner` premi la scansione. Con quei numeri possiamo sistemare definitivamente l'eventuale collo di bottiglia.
