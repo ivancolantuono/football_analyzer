@@ -1084,7 +1084,7 @@ page = st.sidebar.radio(
     [
         "Dashboard",
         "Analisi partita",
-        "Value Scanner",
+        "Scanner",
         "Debug dati",
     ],
 )
