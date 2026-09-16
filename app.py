@@ -1,2051 +1,270 @@
-import math
-import re
-from datetime import datetime, date
-from io import StringIO
+
+from datetime import date
+from io import BytesIO
 
 import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
 
+st.set_page_config(page_title='Football Analyzer', page_icon='⚽', layout='wide')
+st.markdown('<style>.block-container{padding-top:1.5rem}.positive{color:#087f23;font-weight:700}</style>', unsafe_allow_html=True)
 
-# ============================================================
-# CONFIGURAZIONE
-# ============================================================
+FIXTURES_URL='https://www.football-data.co.uk/matches/resources/fixtures.csv'
+BASE_URL='https://www.football-data.co.uk/mmz4281/{season}/{league}.csv'
 
-st.set_page_config(
-    page_title="Football Analyzer",
-    page_icon="⚽",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-BASE_URL = "https://www.football-data.co.uk/mmz4281"
-FIXTURES_URL = "https://football-data.co.uk/matches/resources/fixtures.csv"
-
-
-# ============================================================
-# STILE
-# ============================================================
-
-st.markdown(
-    """
-    <style>
-    .main {
-        padding-top: 1rem;
-    }
-
-    .block-container {
-        padding-top: 1.5rem;
-    }
-
-    .metric-card {
-        padding: 15px;
-        border-radius: 10px;
-        border: 1px solid rgba(128,128,128,0.25);
-        margin-bottom: 10px;
-    }
-
-    .value-positive {
-        font-weight: bold;
-    }
-
-    .section-title {
-        font-size: 1.4rem;
-        font-weight: 700;
-        margin-top: 1rem;
-        margin-bottom: 0.5rem;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-# ============================================================
-# CAMPIONATI
-# ============================================================
-
-LEAGUES = {
-    "Italia": {
-        "I1": "Serie A",
-        "I2": "Serie B",
-    },
-    "Inghilterra": {
-        "E0": "Premier League",
-        "E1": "Championship",
-        "E2": "League One",
-        "E3": "League Two",
-    },
-    "Spagna": {
-        "SP1": "La Liga",
-        "SP2": "Segunda Division",
-    },
-    "Germania": {
-        "D1": "Bundesliga",
-        "D2": "2. Bundesliga",
-    },
-    "Francia": {
-        "F1": "Ligue 1",
-        "F2": "Ligue 2",
-    },
-    "Olanda": {
-        "N1": "Eredivisie",
-    },
-    "Belgio": {
-        "B1": "Belgian First Division",
-    },
-    "Portogallo": {
-        "P1": "Primeira Liga",
-    },
-    "Turchia": {
-        "T1": "Super Lig",
-    },
-    "Grecia": {
-        "G1": "Super League",
-    },
-    "Scozia": {
-        "SC0": "Premiership",
-        "SC1": "Championship",
-        "SC2": "League One",
-        "SC3": "League Two",
-    },
-    "Polonia": {
-        "POL": "Poland Ekstraklasa",
-    },
-    "Romania": {
-        "ROM": "Romania Liga 1",
-    },
-    "Russia": {
-        "RUS": "Russia Premier League",
-    },
-    "USA": {
-        "USA": "MLS",
-    },
-    "Giappone": {
-        "JPN": "J League",
-    },
-    "Brasile": {
-        "BRA": "Brazil Serie A",
-    },
-    "Argentina": {
-        "ARG": "Argentina Primera Division",
-    },
-    "Messico": {
-        "MEX": "Mexico Liga MX",
-    },
+LEAGUES={
+'England':{'Premier League':'E0','Championship':'E1','League One':'E2','League Two':'E3'},
+'Italy':{'Serie A':'I1','Serie B':'I2'},
+'Spain':{'La Liga':'SP1','La Liga 2':'SP2'},
+'Germany':{'Bundesliga':'D1','2. Bundesliga':'D2'},
+'France':{'Ligue 1':'F1','Ligue 2':'F2'},
+'Netherlands':{'Eredivisie':'N1'},'Belgium':{'Jupiler League':'B1'},
+'Portugal':{'Primeira Liga':'P1'},'Turkey':{'Super Lig':'T1'},'Greece':{'Super League':'G1'},
+'Scotland':{'Premiership':'SC0','Championship':'SC1','League One':'SC2','League Two':'SC3'},
+'Poland':{'Ekstraklasa':'POL'},'Romania':{'Liga 1':'ROM'},'Russia':{'Premier League':'RUS'},
+'USA':{'MLS':'USA'},'Japan':{'J1 League':'JPN'},'Brazil':{'Serie A':'BRA'},
+'Argentina':{'Liga Profesional':'ARG'},'Mexico':{'Liga MX':'MEX'},
+'Austria':{'Bundesliga':'AUT'},'Denmark':{'Superliga':'DNK'},'Norway':{'Eliteserien':'NOR'},
+'Sweden':{'Allsvenskan':'SWE'},'Switzerland':{'Super League':'SWZ'},
+'Finland':{'Veikkausliiga':'FIN'},'Ireland':{'Premier Division':'IRL'},'China':{'Super League':'CHN'}
 }
 
 
-# ============================================================
-# UTILITY
-# ============================================================
-
+def season_code(y): return f'{y%100:02d}{(y+1)%100:02d}'
 def current_season():
-    """
-    Restituisce la stagione corrente nel formato Football-Data.
-    Esempio:
-    2026/27 -> 2627
-    """
-    today = date.today()
+    d=date.today(); return d.year if d.month>=8 else d.year-1
 
-    if today.month >= 7:
-        y1 = today.year
-        y2 = today.year + 1
-    else:
-        y1 = today.year - 1
-        y2 = today.year
+def num(x):
+    try: return float(str(x).replace(',','.'))
+    except: return np.nan
 
-    return f"{str(y1)[-2:]}{str(y2)[-2:]}"
+def fair(p): return 1/p if p>0 else np.nan
+def value(p,o): return (p*o-1)*100 if p>0 and o>1 else np.nan
 
-
-def previous_season():
-    code = current_season()
-
-    y1 = int(code[:2])
-    y2 = int(code[2:])
-
-    return f"{(y1 - 1) % 100:02d}{(y2 - 1) % 100:02d}"
-
-
-def season_label(code):
-    return f"20{code[:2]}/20{code[2:]}"
-
-
-def safe_float(value, default=np.nan):
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def poisson_probability(lmbda, k):
-    if lmbda < 0:
-        return 0.0
-
-    try:
-        return math.exp(-lmbda) * (lmbda ** k) / math.factorial(k)
-    except Exception:
-        return 0.0
-
-
-def fair_odds(probability):
-    if probability is None or probability <= 0:
-        return np.nan
-
-    return 1.0 / probability
-
-
-def calculate_value(probability, odds):
-    if probability is None or odds is None:
-        return np.nan
-
-    if probability <= 0 or odds <= 0:
-        return np.nan
-
-    return probability * odds - 1.0
-
-
-# ============================================================
-# DOWNLOAD DATI
-# ============================================================
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def download_csv(url):
-    try:
-        response = requests.get(
-            url,
-            timeout=20,
-            headers={
-                "User-Agent": "Mozilla/5.0"
-            },
-        )
-
-        if response.status_code != 200:
-            return None, f"HTTP {response.status_code}"
-
-        content = response.content.decode(
-            "latin1",
-            errors="replace",
-        )
-
-        df = pd.read_csv(
-            StringIO(content),
-            low_memory=False,
-        )
-
-        return df, None
-
-    except Exception as exc:
-        return None, str(exc)
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def load_league(league_code, season_code):
-    url = f"{BASE_URL}/{season_code}/{league_code}.csv"
-
-    df, error = download_csv(url)
-
-    if df is None:
-        return None, error, url
-
-    return df, None, url
-
+def poisson(k,l): return math.exp(-l)*l**k/math.factorial(k) if l>0 else (1 if k==0 else 0)
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def load_fixtures():
-    df, error = download_csv(FIXTURES_URL)
-
-    if df is None:
-        return None, error
-
-    return df, None
-
-
-# ============================================================
-# PREPARAZIONE DATAFRAME
-# ============================================================
-
-def prepare_dataframe(df):
-    if df is None or df.empty:
-        return None
-
-    df = df.copy()
-
-    df.columns = [
-        str(c).strip()
-        for c in df.columns
-    ]
-
-    required = [
-        "HomeTeam",
-        "AwayTeam",
-        "FTHG",
-        "FTAG",
-        "FTR",
-    ]
-
-    for col in required:
-        if col not in df.columns:
-            return None
-
-    if "Date" in df.columns:
-        df["Date"] = pd.to_datetime(
-            df["Date"],
-            errors="coerce",
-            dayfirst=True,
-        )
-
-    for col in [
-        "FTHG",
-        "FTAG",
-        "HTHG",
-        "HTAG",
-    ]:
-        if col in df.columns:
-            df[col] = pd.to_numeric(
-                df[col],
-                errors="coerce",
-            )
-
-    df = df.dropna(
-        subset=[
-            "HomeTeam",
-            "AwayTeam",
-            "FTHG",
-            "FTAG",
-        ]
-    )
-
-    if "Date" in df.columns:
-        df = df.sort_values("Date")
-
-    return df.reset_index(drop=True)
-
-
-# ============================================================
-# STATISTICHE SQUADRA
-# ============================================================
-
-def team_matches(df, team, last_n=None):
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    home = df[df["HomeTeam"] == team].copy()
-    away = df[df["AwayTeam"] == team].copy()
-
-    home["GF"] = home["FTHG"]
-    home["GA"] = home["FTAG"]
-    home["Venue"] = "Casa"
-    home["Opponent"] = home["AwayTeam"]
-
-    away["GF"] = away["FTAG"]
-    away["GA"] = away["FTHG"]
-    away["Venue"] = "Trasferta"
-    away["Opponent"] = away["HomeTeam"]
-
-    result = pd.concat(
-        [home, away],
-        ignore_index=True,
-    )
-
-    if "Date" in result.columns:
-        result = result.sort_values("Date")
-
-    if last_n:
-        result = result.tail(last_n)
-
-    return result
-
-
-def team_stats(df, team, last_n=None):
-    matches = team_matches(
-        df,
-        team,
-        last_n,
-    )
-
-    if matches.empty:
-        return {
-            "matches": 0,
-            "gf": 0,
-            "ga": 0,
-            "wins": 0,
-            "draws": 0,
-            "losses": 0,
-            "avg_gf": 0,
-            "avg_ga": 0,
-            "over05": 0,
-            "over15": 0,
-            "over25": 0,
-            "over35": 0,
-            "over45": 0,
-            "btts": 0,
-            "clean_sheet": 0,
-            "failed_to_score": 0,
-        }
-
-    gf = matches["GF"].astype(float)
-    ga = matches["GA"].astype(float)
-
-    wins = int((gf > ga).sum())
-    draws = int((gf == ga).sum())
-    losses = int((gf < ga).sum())
-
-    total_goals = gf + ga
-
-    stats = {
-        "matches": len(matches),
-        "gf": gf.sum(),
-        "ga": ga.sum(),
-        "wins": wins,
-        "draws": draws,
-        "losses": losses,
-        "avg_gf": gf.mean(),
-        "avg_ga": ga.mean(),
-        "over05": (total_goals > 0).mean(),
-        "over15": (total_goals > 1).mean(),
-        "over25": (total_goals > 2).mean(),
-        "over35": (total_goals > 3).mean(),
-        "over45": (total_goals > 4).mean(),
-        "btts": ((gf > 0) & (ga > 0)).mean(),
-        "clean_sheet": (ga == 0).mean(),
-        "failed_to_score": (gf == 0).mean(),
-    }
-
-    return stats
-
-
-# ============================================================
-# STATISTICHE CAMPIONATO
-# ============================================================
-
-def league_averages(df):
-    if df is None or df.empty:
-        return {
-            "home_goals": 1.35,
-            "away_goals": 1.10,
-            "total_goals": 2.45,
-        }
-
-    home_goals = df["FTHG"].mean()
-    away_goals = df["FTAG"].mean()
-
-    return {
-        "home_goals": float(home_goals),
-        "away_goals": float(away_goals),
-        "total_goals": float(home_goals + away_goals),
-    }
-
-
-# ============================================================
-# FORZA SQUADRE
-# ============================================================
-
-def calculate_team_strengths(df, home_team, away_team):
-    averages = league_averages(df)
-
-    home_history = team_stats(
-        df,
-        home_team,
-        last_n=15,
-    )
-
-    away_history = team_stats(
-        df,
-        away_team,
-        last_n=15,
-    )
-
-    league_home = averages["home_goals"]
-    league_away = averages["away_goals"]
-
-    if league_home <= 0:
-        league_home = 1.35
-
-    if league_away <= 0:
-        league_away = 1.10
-
-    home_attack = home_history["avg_gf"] / league_home
-    home_defense = home_history["avg_ga"] / league_away
-
-    away_attack = away_history["avg_gf"] / league_away
-    away_defense = away_history["avg_ga"] / league_home
-
-    home_xg = league_home * home_attack * away_defense
-    away_xg = league_away * away_attack * home_defense
-
-    home_xg = max(0.05, min(home_xg, 5.0))
-    away_xg = max(0.05, min(away_xg, 5.0))
-
-    return {
-        "home_xg": home_xg,
-        "away_xg": away_xg,
-        "home_attack": home_attack,
-        "home_defense": home_defense,
-        "away_attack": away_attack,
-        "away_defense": away_defense,
-        "home_stats": home_history,
-        "away_stats": away_history,
-    }
-
-
-# ============================================================
-# MODELLO POISSON
-# ============================================================
-
-def score_matrix(home_xg, away_xg, max_goals=8):
-    matrix = np.zeros(
-        (max_goals + 1, max_goals + 1)
-    )
-
-    for home_goals in range(max_goals + 1):
-        for away_goals in range(max_goals + 1):
-
-            matrix[
-                home_goals,
-                away_goals
-            ] = (
-                poisson_probability(
-                    home_xg,
-                    home_goals,
-                )
-                *
-                poisson_probability(
-                    away_xg,
-                    away_goals,
-                )
-            )
-
-    total = matrix.sum()
-
-    if total > 0:
-        matrix /= total
-
-    return matrix
-
-
-def calculate_probabilities(home_xg, away_xg):
-    matrix = score_matrix(
-        home_xg,
-        away_xg,
-    )
-
-    home_win = np.tril(
-        matrix,
-        -1,
-    ).sum()
-
-    draw = np.trace(matrix)
-
-    away_win = np.triu(
-        matrix,
-        1,
-    ).sum()
-
-    total_xg = home_xg + away_xg
-
-    over05 = 1 - poisson_probability(
-        total_xg,
-        0,
-    )
-
-    under05 = 1 - over05
-
-    over15 = 1 - (
-        poisson_probability(total_xg, 0)
-        +
-        poisson_probability(total_xg, 1)
-    )
-
-    under15 = 1 - over15
-
-    under25 = sum(
-        poisson_probability(total_xg, i)
-        for i in range(3)
-    )
-
-    over25 = 1 - under25
-
-    under35 = sum(
-        poisson_probability(total_xg, i)
-        for i in range(4)
-    )
-
-    over35 = 1 - under35
-
-    under45 = sum(
-        poisson_probability(total_xg, i)
-        for i in range(5)
-    )
-
-    over45 = 1 - under45
-
-    home_scores = 1 - math.exp(-home_xg)
-    away_scores = 1 - math.exp(-away_xg)
-
-    home_clean = math.exp(-away_xg)
-    away_clean = math.exp(-home_xg)
-
-    home_no_goal = math.exp(-home_xg)
-    away_no_goal = math.exp(-away_xg)
-
-    btts = (
-        1
-        - home_no_goal
-        - away_no_goal
-        + math.exp(-total_xg)
-    )
-
-    return {
-        "1": home_win,
-        "X": draw,
-        "2": away_win,
-
-        "1X": home_win + draw,
-        "X2": draw + away_win,
-        "12": home_win + away_win,
-
-        "Over 0.5": over05,
-        "Under 0.5": under05,
-
-        "Over 1.5": over15,
-        "Under 1.5": under15,
-
-        "Over 2.5": over25,
-        "Under 2.5": under25,
-
-        "Over 3.5": over35,
-        "Under 3.5": under35,
-
-        "Over 4.5": over45,
-        "Under 4.5": under45,
-
-        "Goal": btts,
-        "No Goal": 1 - btts,
-
-        "Casa segna": home_scores,
-        "Casa non segna": home_no_goal,
-
-        "Trasferta segna": away_scores,
-        "Trasferta non segna": away_no_goal,
-
-        "Clean Sheet Casa": home_clean,
-        "Clean Sheet Trasferta": away_clean,
-    }
-
-
-# ============================================================
-# RISULTATI ESATTI
-# ============================================================
-
-def top_exact_scores(matrix, number=10):
-    results = []
-
-    for h in range(matrix.shape[0]):
-        for a in range(matrix.shape[1]):
-
-            results.append(
-                {
-                    "Risultato": f"{h}-{a}",
-                    "Probabilità": matrix[h, a],
-                }
-            )
-
-    results.sort(
-        key=lambda x: x["Probabilità"],
-        reverse=True,
-    )
-
-    return results[:number]
-
-
-# ============================================================
-# NORMALIZZAZIONE NOMI SQUADRE
-# ============================================================
-
-def normalize_team_name(name):
-    if pd.isna(name):
-        return ""
-
-    name = str(name).lower().strip()
-
-    replacements = {
-        "man utd": "manchester united",
-        "man united": "manchester united",
-        "man city": "manchester city",
-        "spurs": "tottenham",
-        "wolves": "wolverhampton",
-        "newcastle utd": "newcastle",
-        "west ham utd": "west ham",
-        "nott'm forest": "nottingham forest",
-        "psv eindhoven": "psv",
-        "inter": "internazionale",
-        "inter milan": "internazionale",
-        "milan": "milan",
-        "roma": "roma",
-    }
-
-    name = replacements.get(
-        name,
-        name,
-    )
-
-    name = re.sub(
-        r"[^a-z0-9 ]",
-        "",
-        name,
-    )
-
-    name = re.sub(
-        r"\s+",
-        " ",
-        name,
-    )
-
-    return name
-
-
-# ============================================================
-# ODDS
-# ============================================================
-
-def extract_odds(row):
-    """
-    Cerca le quote 1X2 e Over/Under presenti nel dataset.
-    Football-Data usa colonne differenti a seconda del bookmaker.
-    """
-
-    result = {
-        "home_odds": np.nan,
-        "draw_odds": np.nan,
-        "away_odds": np.nan,
-        "over25_odds": np.nan,
-        "under25_odds": np.nan,
-    }
-
-    if row is None:
-        return result
-
-    # 1X2
-    for col in [
-        "B365H",
-        "AvgH",
-        "PSH",
-        "WHH",
-        "VCH",
-        "MaxH",
-    ]:
-        if col in row.index:
-            value = safe_float(row[col])
-            if not np.isnan(value) and value > 1:
-                result["home_odds"] = value
-                break
-
-    for col in [
-        "B365D",
-        "AvgD",
-        "PSD",
-        "WHD",
-        "VCD",
-        "MaxD",
-    ]:
-        if col in row.index:
-            value = safe_float(row[col])
-            if not np.isnan(value) and value > 1:
-                result["draw_odds"] = value
-                break
-
-    for col in [
-        "B365A",
-        "AvgA",
-        "PSA",
-        "WHA",
-        "VCA",
-        "MaxA",
-    ]:
-        if col in row.index:
-            value = safe_float(row[col])
-            if not np.isnan(value) and value > 1:
-                result["away_odds"] = value
-                break
-
-    # Over / Under 2.5
-    for col in [
-        "B365>2.5",
-        "Avg>2.5",
-        "P>2.5",
-        "Max>2.5",
-    ]:
-        if col in row.index:
-            value = safe_float(row[col])
-            if not np.isnan(value) and value > 1:
-                result["over25_odds"] = value
-                break
-
-    for col in [
-        "B365<2.5",
-        "Avg<2.5",
-        "P<2.5",
-        "Max<2.5",
-    ]:
-        if col in row.index:
-            value = safe_float(row[col])
-            if not np.isnan(value) and value > 1:
-                result["under25_odds"] = value
-                break
-
-    return result
-
-
-# ============================================================
-# VALUE SCANNER
-# ============================================================
-
-def calculate_value_row(
-    league_name,
-    league_code,
-    row,
-    history_df,
-):
-    home = str(row["HomeTeam"])
-    away = str(row["AwayTeam"])
-
+def load_league(year, code):
+    url=BASE_URL.format(season=season_code(year),league=code)
     try:
-        strengths = calculate_team_strengths(
-            history_df,
-            home,
-            away,
-        )
-
-        probabilities = calculate_probabilities(
-            strengths["home_xg"],
-            strengths["away_xg"],
-        )
-
-        odds = extract_odds(row)
-
-        candidates = []
-
-        markets = [
-            (
-                "1",
-                probabilities["1"],
-                odds["home_odds"],
-            ),
-            (
-                "X",
-                probabilities["X"],
-                odds["draw_odds"],
-            ),
-            (
-                "2",
-                probabilities["2"],
-                odds["away_odds"],
-            ),
-            (
-                "Over 2.5",
-                probabilities["Over 2.5"],
-                odds["over25_odds"],
-            ),
-            (
-                "Under 2.5",
-                probabilities["Under 2.5"],
-                odds["under25_odds"],
-            ),
-        ]
-
-        for market, probability, odd in markets:
-
-            if pd.isna(odd):
-                continue
-
-            value = calculate_value(
-                probability,
-                odd,
-            )
-
-            if pd.isna(value):
-                continue
-
-            candidates.append(
-                {
-                    "Campionato": league_name,
-                    "Codice": league_code,
-                    "Partita": f"{home} - {away}",
-                    "Casa": home,
-                    "Trasferta": away,
-                    "Mercato": market,
-                    "Probabilità": probability,
-                    "Quota": odd,
-                    "Quota equa": fair_odds(probability),
-                    "Value": value,
-                    "xG Casa": strengths["home_xg"],
-                    "xG Trasferta": strengths["away_xg"],
-                }
-            )
-
-        if not candidates:
-            return []
-
-        return candidates
-
-    except Exception:
-        return []
-
-
-def scan_league(
-    league_code,
-    league_name,
-    season_code,
-):
-    df, error, url = load_league(
-        league_code,
-        season_code,
-    )
-
-    if df is None:
-        return [], {
-            "league": league_name,
-            "code": league_code,
-            "status": "ERRORE",
-            "error": error,
-        }
-
-    df = prepare_dataframe(df)
-
-    if df is None or df.empty:
-        return [], {
-            "league": league_name,
-            "code": league_code,
-            "status": "VUOTO",
-            "error": "Dataset vuoto",
-        }
-
-    # Per lo scanner utilizziamo solo partite già presenti
-    # nel dataset storico.
-    rows = []
-
-    # Limitiamo la scansione alle ultime partite disponibili
-    # per evitare tempi inutilmente elevati.
-    recent = df.tail(150)
-
-    for _, row in recent.iterrows():
-
-        candidates = calculate_value_row(
-            league_name,
-            league_code,
-            row,
-            df,
-        )
-
-        rows.extend(candidates)
-
-    return rows, {
-        "league": league_name,
-        "code": league_code,
-        "status": "OK",
-        "matches": len(df),
-        "scanned": len(recent),
-        "url": url,
-    }
-
-
-def scan_all_leagues(
-    selected_countries,
-    season_code,
-    min_value=0.03,
-):
-    all_results = []
-    debug = []
-
-    for country in selected_countries:
-
-        league_dict = LEAGUES.get(
-            country,
-            {},
-        )
-
-        for code, league_name in league_dict.items():
-
-            results, info = scan_league(
-                code,
-                league_name,
-                season_code,
-            )
-
-            debug.append(info)
-
-            for result in results:
-
-                if result["Value"] >= min_value:
-                    all_results.append(result)
-
-    if all_results:
-        result_df = pd.DataFrame(
-            all_results
-        )
-
-        result_df = result_df.sort_values(
-            "Value",
-            ascending=False,
-        )
-
-    else:
-        result_df = pd.DataFrame()
-
-    return result_df, debug
-
-
-# ============================================================
-# FIXTURES FUTURI
-# ============================================================
-
-def prepare_fixtures(df):
-    if df is None or df.empty:
-        return None
-
-    df = df.copy()
-
-    df.columns = [
-        str(c).strip()
-        for c in df.columns
-    ]
-
-    # Tentativi per identificare data
-    date_col = None
-
-    for col in [
-        "Date",
-        "date",
-        "MatchDate",
-        "match_date",
-    ]:
-        if col in df.columns:
-            date_col = col
-            break
-
-    if date_col:
-        df["FixtureDate"] = pd.to_datetime(
-            df[date_col],
-            errors="coerce",
-            dayfirst=True,
-        )
-    else:
-        df["FixtureDate"] = pd.NaT
-
-    if "HomeTeam" not in df.columns:
-        return None
-
-    if "AwayTeam" not in df.columns:
-        return None
-
-    return df
-
-
-# ============================================================
-# VISUALIZZAZIONE PROBABILITA'
-# ============================================================
-
-def probability_table(probabilities):
-    rows = []
-
-    for market, probability in probabilities.items():
-
-        rows.append(
-            {
-                "Mercato": market,
-                "Probabilità": probability,
-                "Quota equa": fair_odds(
-                    probability
-                ),
-            }
-        )
-
-    df = pd.DataFrame(rows)
-
-    df["Probabilità"] = (
-        df["Probabilità"] * 100
-    ).round(2)
-
-    df["Quota equa"] = df["Quota equa"].round(2)
-
-    return df
-
-
-# ============================================================
-# SIDEBAR
-# ============================================================
-
-st.sidebar.title("Football Analyzer")
-
-page = st.sidebar.radio(
-    "Sezione",
-    [
-        "Dashboard",
-        "Analisi partita",
-        "Scanner",
-        "Debug dati",
-    ],
-)
-
-st.sidebar.markdown("---")
-
-st.sidebar.caption(
-    "Modello statistico basato su dati Football-Data."
-)
-
-
-# ============================================================
-# DASHBOARD
-# ============================================================
-
-if page == "Dashboard":
-
-    st.title("⚽ Football Analyzer")
-
-    st.write(
-        "Analisi statistica delle partite di calcio "
-        "con modello Poisson e confronto probabilità/quote."
-    )
-
-    st.markdown("---")
-
-    st.subheader("Campionati disponibili")
-
-    rows = []
-
-    for country, leagues in LEAGUES.items():
-
-        for code, name in leagues.items():
-
-            rows.append(
-                {
-                    "Paese": country,
-                    "Codice": code,
-                    "Campionato": name,
-                }
-            )
-
-    leagues_df = pd.DataFrame(rows)
-
-    st.dataframe(
-        leagues_df,
-        use_container_width=True,
-        hide_index=True,
-    )
-
-    st.markdown("---")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.metric(
-            "Campionati",
-            len(rows),
-        )
-
-    with col2:
-        st.metric(
-            "Stagione",
-            season_label(
-                current_season()
-            ),
-        )
-
-    with col3:
-        st.metric(
-            "Modello",
-            "Poisson",
-        )
-
-    st.info(
-        "Il Value Scanner usa i dati disponibili nei dataset "
-        "Football-Data. Le quote storiche presenti nei CSV "
-        "non devono essere confuse con quote live."
-    )
-
-
-# ============================================================
-# ANALISI PARTITA
-# ============================================================
-
-elif page == "Analisi partita":
-
-    st.title("📊 Analisi partita")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        country = st.selectbox(
-            "Paese",
-            list(LEAGUES.keys()),
-        )
-
-        league_items = LEAGUES[country]
-
-        league_code = st.selectbox(
-            "Campionato",
-            list(league_items.keys()),
-            format_func=lambda x: league_items[x],
-        )
-
-    season_code = st.selectbox(
-        "Stagione",
-        [
-            current_season(),
-            previous_season(),
-            "2425",
-            "2324",
-            "2223",
-        ],
-        format_func=season_label,
-    )
-
-    df, error, url = load_league(
-        league_code,
-        season_code,
-    )
-
-    if df is None:
-
-        st.error(
-            f"Impossibile scaricare il campionato: {error}"
-        )
-
-        st.stop()
-
-    df = prepare_dataframe(df)
-
-    if df is None or df.empty:
-
-        st.error(
-            "Non sono disponibili dati validi."
-        )
-
-        st.stop()
-
-    teams = sorted(
-        set(df["HomeTeam"].dropna())
-        |
-        set(df["AwayTeam"].dropna())
-    )
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        home_team = st.selectbox(
-            "Squadra casa",
-            teams,
-        )
-
-    with col2:
-
-        away_options = [
-            x for x in teams
-            if x != home_team
-        ]
-
-        away_team = st.selectbox(
-            "Squadra ospite",
-            away_options,
-        )
-
-    if st.button(
-        "ANALIZZA PARTITA",
-        type="primary",
-        use_container_width=True,
-    ):
-
-        strengths = calculate_team_strengths(
-            df,
-            home_team,
-            away_team,
-        )
-
-        probabilities = calculate_probabilities(
-            strengths["home_xg"],
-            strengths["away_xg"],
-        )
-
-        matrix = score_matrix(
-            strengths["home_xg"],
-            strengths["away_xg"],
-        )
-
-        st.markdown("---")
-
-        st.subheader(
-            f"{home_team} - {away_team}"
-        )
-
-        c1, c2, c3 = st.columns(3)
-
-        with c1:
-            st.metric(
-                "xG Casa",
-                f"{strengths['home_xg']:.2f}",
-            )
-
-        with c2:
-            st.metric(
-                "xG Trasferta",
-                f"{strengths['away_xg']:.2f}",
-            )
-
-        with c3:
-            st.metric(
-                "xG Totali",
-                f"{strengths['home_xg'] + strengths['away_xg']:.2f}",
-            )
-
-        st.markdown("---")
-
-        st.subheader("1X2")
-
-        c1, c2, c3 = st.columns(3)
-
-        with c1:
-            st.metric(
-                "1",
-                f"{probabilities['1'] * 100:.1f}%",
-            )
-
-        with c2:
-            st.metric(
-                "X",
-                f"{probabilities['X'] * 100:.1f}%",
-            )
-
-        with c3:
-            st.metric(
-                "2",
-                f"{probabilities['2'] * 100:.1f}%",
-            )
-
-        st.subheader("Doppia chance")
-
-        dc_df = pd.DataFrame(
-            {
-                "Mercato": [
-                    "1X",
-                    "X2",
-                    "12",
-                ],
-                "Probabilità": [
-                    probabilities["1X"],
-                    probabilities["X2"],
-                    probabilities["12"],
-                ],
-            }
-        )
-
-        dc_df["Probabilità"] *= 100
-
-        st.dataframe(
-            dc_df.style.format(
-                {
-                    "Probabilità": "{:.1f}%"
-                }
-            ),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        st.subheader(
-            "Over / Under"
-        )
-
-        ou_rows = []
-
-        for line in [
-            "0.5",
-            "1.5",
-            "2.5",
-            "3.5",
-            "4.5",
-        ]:
-
-            ou_rows.append(
-                {
-                    "Linea": line,
-                    "Over": probabilities[
-                        f"Over {line}"
-                    ],
-                    "Under": probabilities[
-                        f"Under {line}"
-                    ],
-                }
-            )
-
-        ou_df = pd.DataFrame(
-            ou_rows
-        )
-
-        ou_df["Over"] *= 100
-        ou_df["Under"] *= 100
-
-        st.dataframe(
-            ou_df.style.format(
-                {
-                    "Over": "{:.1f}%",
-                    "Under": "{:.1f}%",
-                }
-            ),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        st.subheader(
-            "Goal / No Goal"
-        )
-
-        c1, c2 = st.columns(2)
-
-        with c1:
-            st.metric(
-                "Goal",
-                f"{probabilities['Goal'] * 100:.1f}%",
-            )
-
-        with c2:
-            st.metric(
-                "No Goal",
-                f"{probabilities['No Goal'] * 100:.1f}%",
-            )
-
-        st.subheader(
-            "Team to Score"
-        )
-
-        score_df = pd.DataFrame(
-            {
-                "Mercato": [
-                    home_team,
-                    away_team,
-                ],
-                "Segna": [
-                    probabilities["Casa segna"],
-                    probabilities["Trasferta segna"],
-                ],
-                "Non segna": [
-                    probabilities["Casa non segna"],
-                    probabilities["Trasferta non segna"],
-                ],
-            }
-        )
-
-        score_df["Segna"] *= 100
-        score_df["Non segna"] *= 100
-
-        st.dataframe(
-            score_df.style.format(
-                {
-                    "Segna": "{:.1f}%",
-                    "Non segna": "{:.1f}%",
-                }
-            ),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        st.subheader(
-            "Risultati esatti più probabili"
-        )
-
-        exact_scores = top_exact_scores(
-            matrix,
-            10,
-        )
-
-        exact_df = pd.DataFrame(
-            exact_scores
-        )
-
-        exact_df["Probabilità"] *= 100
-
-        st.dataframe(
-            exact_df.style.format(
-                {
-                    "Probabilità": "{:.2f}%"
-                }
-            ),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        st.markdown("---")
-
-        st.subheader(
-            "Statistiche squadre"
-        )
-
-        home_stats = strengths[
-            "home_stats"
-        ]
-
-        away_stats = strengths[
-            "away_stats"
-        ]
-
-        stats_df = pd.DataFrame(
-            {
-                home_team: {
-                    "Partite": home_stats["matches"],
-                    "Gol fatti": home_stats["gf"],
-                    "Gol subiti": home_stats["ga"],
-                    "Vittorie": home_stats["wins"],
-                    "Pareggi": home_stats["draws"],
-                    "Sconfitte": home_stats["losses"],
-                    "Media gol fatti": home_stats["avg_gf"],
-                    "Media gol subiti": home_stats["avg_ga"],
-                    "Over 2.5": home_stats["over25"],
-                    "Goal": home_stats["btts"],
-                    "Clean Sheet": home_stats["clean_sheet"],
-                },
-                away_team: {
-                    "Partite": away_stats["matches"],
-                    "Gol fatti": away_stats["gf"],
-                    "Gol subiti": away_stats["ga"],
-                    "Vittorie": away_stats["wins"],
-                    "Pareggi": away_stats["draws"],
-                    "Sconfitte": away_stats["losses"],
-                    "Media gol fatti": away_stats["avg_gf"],
-                    "Media gol subiti": away_stats["avg_ga"],
-                    "Over 2.5": away_stats["over25"],
-                    "Goal": away_stats["btts"],
-                    "Clean Sheet": away_stats["clean_sheet"],
-                },
-            }
-        )
-
-        for col in [
-            "Over 2.5",
-            "Goal",
-            "Clean Sheet",
-        ]:
-            stats_df.loc[col] *= 100
-
-        st.dataframe(
-            stats_df.style.format(
-                {
-                    "Media gol fatti": "{:.2f}",
-                    "Media gol subiti": "{:.2f}",
-                    "Over 2.5": "{:.1f}%",
-                    "Goal": "{:.1f}%",
-                    "Clean Sheet": "{:.1f}%",
-                }
-            ),
-            use_container_width=True,
-        )
-
-        st.subheader(
-            "Ultime partite"
-        )
-
-        home_recent = team_matches(
-            df,
-            home_team,
-            10,
-        )
-
-        away_recent = team_matches(
-            df,
-            away_team,
-            10,
-        )
-
-        c1, c2 = st.columns(2)
-
-        with c1:
-
-            st.write(home_team)
-
-            if not home_recent.empty:
-
-                display = home_recent[
-                    [
-                        "Date",
-                        "Opponent",
-                        "Venue",
-                        "GF",
-                        "GA",
-                    ]
-                ].copy()
-
-                st.dataframe(
-                    display,
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-        with c2:
-
-            st.write(away_team)
-
-            if not away_recent.empty:
-
-                display = away_recent[
-                    [
-                        "Date",
-                        "Opponent",
-                        "Venue",
-                        "GF",
-                        "GA",
-                    ]
-                ].copy()
-
-                st.dataframe(
-                    display,
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-        st.markdown("---")
-
-        st.subheader(
-            "Probabilità complete"
-        )
-
-        full_probability_df = probability_table(
-            probabilities
-        )
-
-        st.dataframe(
-            full_probability_df.style.format(
-                {
-                    "Probabilità": "{:.2f}%",
-                    "Quota equa": "{:.2f}",
-                }
-            ),
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        st.info(
-            "Il modello Poisson stima la distribuzione dei gol "
-            "partendo dagli xG stimati. Non rappresenta una "
-            "garanzia sull'esito della partita."
-        )
-
-
-# ============================================================
-# VALUE SCANNER
-# ============================================================
-
-elif page == "Scanner":
-
-    st.title("🎯 SCANNER")
-
-    st.write(
-        "Ricerca automatica dei mercati nei campionati "
-        "selezionati dove la probabilità stimata dal modello "
-        "è superiore a quella implicita nella quota."
-    )
-
-    st.warning(
-        "Il Value è un indicatore matematico del modello. "
-        "Non significa che una giocata sia certa o garantita."
-    )
-
-    st.markdown("---")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        selected_countries = st.multiselect(
-            "Campionati da analizzare",
-            list(LEAGUES.keys()),
-            default=[
-                "Italia",
-                "Inghilterra",
-                "Spagna",
-                "Germania",
-                "Francia",
-            ],
-        )
-
-    with col2:
-
-        season_code = st.selectbox(
-            "Stagione",
-            [
-                current_season(),
-                previous_season(),
-                "2425",
-                "2324",
-            ],
-            format_func=season_label,
-        )
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-
-        min_value_percent = st.number_input(
-            "Value minimo %",
-            min_value=-50.0,
-            max_value=200.0,
-            value=3.0,
-            step=1.0,
-        )
-
-    with col2:
-
-        min_probability_percent = st.number_input(
-            "Probabilità minima %",
-            min_value=0.0,
-            max_value=100.0,
-            value=55.0,
-            step=5.0,
-        )
-
-    with col3:
-
-        max_results = st.number_input(
-            "Numero risultati",
-            min_value=5,
-            max_value=200,
-            value=30,
-            step=5,
-        )
-
-    if st.button(
-        "AVVIA VALUE SCANNER",
-        type="primary",
-        use_container_width=True,
-    ):
-
-        if not selected_countries:
-
-            st.error(
-                "Seleziona almeno un campionato."
-            )
-
-            st.stop()
-
-        with st.spinner(
-            "Analisi dei campionati in corso..."
-        ):
-
-            result_df, debug = scan_all_leagues(
-                selected_countries,
-                season_code,
-                min_value=min_value_percent / 100,
-            )
-
-        st.session_state[
-            "scanner_results"
-        ] = result_df
-
-        st.session_state[
-            "scanner_debug"
-        ] = debug
-
-    result_df = st.session_state.get(
-        "scanner_results",
-        pd.DataFrame(),
-    )
-
-    if not result_df.empty:
-
-        result_df = result_df[
-            result_df["Probabilità"]
-            >= min_probability_percent / 100
-        ].copy()
-
-        result_df = result_df.sort_values(
-            "Value",
-            ascending=False,
-        ).head(
-            int(max_results)
-        )
-
-        st.markdown("---")
-
-        st.subheader(
-            f"Risultati trovati: {len(result_df)}"
-        )
-
-        display_df = result_df[
-            [
-                "Campionato",
-                "Partita",
-                "Mercato",
-                "Probabilità",
-                "Quota",
-                "Quota equa",
-                "Value",
-                "xG Casa",
-                "xG Trasferta",
-            ]
-        ].copy()
-
-        display_df[
-            "Probabilità"
-        ] *= 100
-
-        display_df[
-            "Value"
-        ] *= 100
-
-        display_df[
-            "Probabilità"
-        ] = display_df[
-            "Probabilità"
-        ].round(1)
-
-        display_df[
-            "Value"
-        ] = display_df[
-            "Value"
-        ].round(1)
-
-        display_df[
-            "Quota"
-        ] = display_df[
-            "Quota"
-        ].round(2)
-
-        display_df[
-            "Quota equa"
-        ] = display_df[
-            "Quota equa"
-        ].round(2)
-
-        display_df[
-            "xG Casa"
-        ] = display_df[
-            "xG Casa"
-        ].round(2)
-
-        display_df[
-            "xG Trasferta"
-        ] = display_df[
-            "xG Trasferta"
-        ].round(2)
-
-        st.dataframe(
-            display_df,
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        st.markdown("---")
-
-        st.subheader(
-            "Migliori opportunità secondo il modello"
-        )
-
-        for _, item in result_df.head(10).iterrows():
-
-            probability = item[
-                "Probabilità"
-            ] * 100
-
-            value = item[
-                "Value"
-            ] * 100
-
-            st.markdown(
-                f"""
-                **{item['Partita']}**
-
-                Campionato: {item['Campionato']}  
-                Mercato: **{item['Mercato']}**  
-                Probabilità modello: **{probability:.1f}%**  
-                Quota: **{item['Quota']:.2f}**  
-                Quota equa: **{item['Quota equa']:.2f}**  
-                Value: **{value:+.1f}%**  
-                xG: **{item['xG Casa']:.2f} - {item['xG Trasferta']:.2f}**
-                """
-            )
-
-            st.markdown("---")
-
-    elif "scanner_results" in st.session_state:
-
-        st.info(
-            "Nessun risultato soddisfa i filtri impostati."
-        )
-
-
-# ============================================================
-# DEBUG DATI
-# ============================================================
-
-elif page == "Debug dati":
-
-    st.title("🔎 Controllo dati")
-
-    st.write(
-        "Questa sezione serve per verificare quali campionati "
-        "sono effettivamente disponibili e quali dataset "
-        "vengono scaricati."
-    )
-
-    season_code = st.selectbox(
-        "Stagione da verificare",
-        [
-            current_season(),
-            previous_season(),
-            "2425",
-            "2324",
-        ],
-        format_func=season_label,
-    )
-
-    if st.button(
-        "CONTROLLA TUTTI I CAMPIONATI",
-        type="primary",
-        use_container_width=True,
-    ):
-
-        debug_rows = []
-
-        progress = st.progress(0)
-
-        all_leagues = []
-
-        for country, leagues in LEAGUES.items():
-
-            for code, name in leagues.items():
-
-                all_leagues.append(
-                    (
-                        country,
-                        code,
-                        name,
-                    )
-                )
-
-        total = len(all_leagues)
-
-        for index, (
-            country,
-            code,
-            name,
-        ) in enumerate(all_leagues):
-
-            df, error, url = load_league(
-                code,
-                season_code,
-            )
-
-            if df is None:
-
-                debug_rows.append(
-                    {
-                        "Paese": country,
-                        "Codice": code,
-                        "Campionato": name,
-                        "Stato": "ERRORE",
-                        "Partite": 0,
-                        "Errore": error,
-                    }
-                )
-
-            else:
-
-                prepared = prepare_dataframe(
-                    df
-                )
-
-                if prepared is None:
-
-                    debug_rows.append(
-                        {
-                            "Paese": country,
-                            "Codice": code,
-                            "Campionato": name,
-                            "Stato": "FORMATO NON VALIDO",
-                            "Partite": 0,
-                            "Errore": "Colonne richieste mancanti",
-                        }
-                    )
-
-                else:
-
-                    debug_rows.append(
-                        {
-                            "Paese": country,
-                            "Codice": code,
-                            "Campionato": name,
-                            "Stato": "OK",
-                            "Partite": len(
-                                prepared
-                            ),
-                            "Errore": "",
-                        }
-                    )
-
-            progress.progress(
-                (index + 1) / total
-            )
-
-        debug_df = pd.DataFrame(
-            debug_rows
-        )
-
-        st.session_state[
-            "debug_df"
-        ] = debug_df
-
-    if "debug_df" in st.session_state:
-
-        debug_df = st.session_state[
-            "debug_df"
-        ]
-
-        st.dataframe(
-            debug_df,
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        ok_count = int(
-            (
-                debug_df["Stato"]
-                == "OK"
-            ).sum()
-        )
-
-        error_count = len(
-            debug_df
-        ) - ok_count
-
-        c1, c2, c3 = st.columns(3)
-
-        with c1:
-            st.metric(
-                "Campionati controllati",
-                len(debug_df),
-            )
-
-        with c2:
-            st.metric(
-                "OK",
-                ok_count,
-            )
-
-        with c3:
-            st.metric(
-                "Con problemi",
-                error_count,
-            )
-
-
-# ============================================================
-# FOOTER
-# ============================================================
-
-st.markdown("---")
-
-st.caption(
-    "Football Analyzer — modello statistico sperimentale. "
-    "Le probabilità sono stime matematiche e non costituiscono "
-    "garanzia dell'esito di una partita."
-)
+        r=requests.get(url,timeout=25,headers={'User-Agent':'Mozilla/5.0 FootballAnalyzer'})
+        if r.status_code!=200: return pd.DataFrame(),f'HTTP {r.status_code}',url
+        df=pd.read_csv(BytesIO(r.content),encoding='latin1',on_bad_lines='skip')
+        df.columns=df.columns.astype(str).str.strip()
+        if 'Date' in df: df['Date']=pd.to_datetime(df['Date'],dayfirst=True,errors='coerce')
+        for c in ['FTHG','FTAG','HTHG','HTAG','HS','AS','HST','AST','HC','AC','HY','AY','HR','AR']:
+            if c in df: df[c]=pd.to_numeric(df[c],errors='coerce')
+        return df,'OK',url
+    except Exception as e: return pd.DataFrame(),str(e),url
+
+@st.cache_data(ttl=900, show_spinner=False)
+def load_fixtures():
+    try:
+        r=requests.get(FIXTURES_URL,timeout=25,headers={'User-Agent':'Mozilla/5.0 FootballAnalyzer'})
+        if r.status_code!=200: return pd.DataFrame(),f'HTTP {r.status_code}'
+        df=pd.read_csv(BytesIO(r.content),encoding='latin1',on_bad_lines='skip')
+        df.columns=df.columns.astype(str).str.strip()
+        if 'Date' in df: df['Date']=pd.to_datetime(df['Date'],dayfirst=True,errors='coerce')
+        return df,'OK'
+    except Exception as e: return pd.DataFrame(),str(e)
+
+def completed(df):
+    if df.empty or not {'FTHG','FTAG'}.issubset(df.columns): return pd.DataFrame()
+    d=df.copy(); d['FTHG']=pd.to_numeric(d['FTHG'],errors='coerce'); d['FTAG']=pd.to_numeric(d['FTAG'],errors='coerce')
+    return d[d.FTHG.notna() & d.FTAG.notna()].sort_values('Date')
+
+def team_hist(df,team,before=None,n=12):
+    d=completed(df)
+    if before is not None and 'Date' in d: d=d[d.Date<before]
+    d=d[(d.HomeTeam==team)|(d.AwayTeam==team)].tail(n)
+    return d
+
+def strengths(df,team,before=None):
+    h=team_hist(df,team,before)
+    if h.empty:return 1,1,0
+    gf=[];ga=[]
+    for _,r in h.iterrows():
+        if r.HomeTeam==team: gf.append(r.FTHG);ga.append(r.FTAG)
+        else: gf.append(r.FTAG);ga.append(r.FTHG)
+    lg=max((completed(df).FTHG.mean()+completed(df).FTAG.mean())/2,0.8)
+    att=np.nanmean(gf)/lg; de=np.nanmean(ga)/lg; w=min(1,len(h)/8)
+    return float(np.clip(1+(att-1)*w,.55,1.7)),float(np.clip(1+(de-1)*w,.55,1.7)),len(h)
+
+def xg(df,home,away,before=None):
+    d=completed(df)
+    if before is not None:d=d[d.Date<before]
+    lh=float(d.FTHG.mean()) if not d.empty else 1.45; la=float(d.FTAG.mean()) if not d.empty else 1.15
+    ha,hd,hn=strengths(df,home,before); aa,ad,an=strengths(df,away,before)
+    return float(np.clip(lh*ha*ad,.15,4.5)),float(np.clip(la*aa*hd,.15,4.5)),hn,an
+
+def markets(xh,xa):
+    m=np.array([[poisson(i,xh)*poisson(j,xa) for j in range(11)] for i in range(11)]);m/=m.sum()
+    one=np.tril(m,-1).sum(); draw=np.trace(m); two=np.triu(m,1).sum()
+    total={}
+    for i in range(21): total[i]=sum(m[h,a] for h in range(11) for a in range(11) if h+a==i)
+    out={'1':one,'X':draw,'2':two,'1X':one+draw,'X2':draw+two,'12':one+two}
+    for line in [.5,1.5,2.5,3.5,4.5]:
+        out[f'Over {line}']=sum(p for g,p in total.items() if g>line)
+        out[f'Under {line}']=sum(p for g,p in total.items() if g<line)
+    btts=m[1:,1:].sum();out['BTTS']=btts;out['No BTTS']=1-btts
+    out['Home to score']=1-m[:,0].sum();out['Away to score']=1-m[0,:].sum()
+    out['Home clean sheet']=m[:,0].sum();out['Away clean sheet']=m[0,:].sum()
+    return out
+
+ODDS={'1':['B365H','MaxH','AvgH'],'X':['B365D','MaxD','AvgD'],'2':['B365A','MaxA','AvgA'],
+      'Over 2.5':['B365>2.5','P>2.5','Max>2.5','Avg>2.5'],'Under 2.5':['B365<2.5','P<2.5','Max<2.5','Avg<2.5'],
+      'BTTS':['B365BTTS','AvgBTTS']}
+
+def odds(row,market):
+    for c in ODDS.get(market,[]):
+        if c in row.index:
+            v=num(row[c])
+            if np.isfinite(v) and v>1:return v,c
+    return np.nan,''
+
+def top_scores(xh,xa,n=8):
+    rows=[]
+    for h in range(11):
+        for a in range(11): rows.append((h,a,poisson(h,xh)*poisson(a,xa)))
+    return sorted(rows,key=lambda z:z[2],reverse=True)[:n]
+
+
+def scan_future(fixtures,min_value,min_prob,codes,days):
+    if fixtures.empty:return pd.DataFrame()
+    f=fixtures.copy()
+    if not {'Date','HomeTeam','AwayTeam'}.issubset(f.columns):return pd.DataFrame()
+    today=pd.Timestamp(date.today());end=today+pd.Timedelta(days=int(days))
+    f=f[f.Date.notna()&(f.Date>=today)&(f.Date<=end)]
+    if 'Div' in f:f=f[f.Div.isin(codes)]
+    cache={};rows=[]
+    for _,r in f.iterrows():
+        code=r.get('Div',''); home=r.HomeTeam;away=r.AwayTeam;dt=r.Date
+        if code not in cache:
+            d,_,_=load_league(current_season(),code)
+            if d.empty:d,_,_=load_league(current_season()-1,code)
+            cache[code]=d
+        d=cache[code]
+        if d.empty:continue
+        hist=completed(d);hist=hist[hist.Date<dt]
+        if len(hist)<8:continue
+        xh,xa,hn,an=xg(hist,home,away)
+        for market,p in markets(xh,xa).items():
+            if p*100<min_prob:continue
+            o,src=odds(r,market)
+            if not np.isfinite(o):continue
+            v=value(p,o)
+            if not np.isfinite(v) or v<min_value:continue
+            rows.append({'Data':dt.strftime('%d/%m/%Y'),'Ora':r.get('Time',''),'Campionato':code,'Partita':f'{home} - {away}',
+                         'Mercato':market,'Prob. modello %':round(p*100,2),'Quota':round(o,2),'Quota equa':round(fair(p),2),
+                         'Value %':round(v,2),'xG Casa':round(xh,2),'xG Trasferta':round(xa,2),'Campione':f'{hn}/{an}','Fonte quota':src})
+    return pd.DataFrame(rows).sort_values(['Value %','Prob. modello %'],ascending=False) if rows else pd.DataFrame()
+
+
+def backtest(df,market,min_prob,min_value):
+    d=completed(df);rows=[]
+    for dt in d.Date.dropna().unique():
+        before=d[d.Date<dt]
+        if len(before)<10:continue
+        matches=d[d.Date==dt]
+        for _,r in matches.iterrows():
+            xh,xa,_,_=xg(before,r.HomeTeam,r.AwayTeam);p=markets(xh,xa).get(market)
+            o,_=odds(r,market)
+            if p is None or not np.isfinite(o) or p*100<min_prob:continue
+            v=value(p,o)
+            if not np.isfinite(v) or v<min_value:continue
+            h=num(r.FTHG);a=num(r.FTAG);g=h+a
+            if market.startswith('Over '): won=g>float(market.split()[1])
+            elif market.startswith('Under '): won=g<float(market.split()[1])
+            elif market=='BTTS':won=h>0 and a>0
+            elif market=='No BTTS':won=not(h>0 and a>0)
+            elif market=='1':won=h>a
+            elif market=='X':won=h==a
+            elif market=='2':won=h<a
+            elif market=='1X':won=h>=a
+            elif market=='X2':won=a>=h
+            elif market=='12':won=h!=a
+            else:continue
+            rows.append({'Data':r.Date,'Partita':f'{r.HomeTeam} - {r.AwayTeam}','Mercato':market,'Probabilità %':round(p*100,2),'Quota':o,'Value %':v,'Vinta':won,'Profitto':o-1 if won else -1})
+    return pd.DataFrame(rows)
+
+
+def dashboard():
+    st.title('⚽ Football Analyzer')
+    st.write('Modello pre-partita basato su dati Football-Data, xG semplificati e distribuzione di Poisson.')
+    c1,c2,c3=st.columns(3);c1.metric('Dati','Football-Data');c2.metric('Modello','Poisson + forma');c3.metric('Scanner','Fixture future')
+    st.info('Il Value Scanner calcola Value = probabilità modello × quota − 1. È una misura teorica, non una garanzia di profitto.')
+
+
+def analysis():
+    st.title('🔎 Analisi partita')
+    country=st.selectbox('Nazione',list(LEAGUES));name=st.selectbox('Campionato',list(LEAGUES[country]));code=LEAGUES[country][name]
+    year=st.selectbox('Stagione',[current_season(),current_season()-1,current_season()-2])
+    df,status,url=load_league(year,code)
+    if df.empty:st.error(status);return
+    d=completed(df);teams=sorted(set(d.HomeTeam.dropna())|set(d.AwayTeam.dropna()))
+    h=st.selectbox('🏠 Casa',teams);a=st.selectbox('✈️ Trasferta',[x for x in teams if x!=h])
+    if st.button('🚀 Analizza',type='primary',use_container_width=True):
+        xh,xa,hn,an=xg(d,h,a);m=markets(xh,xa)
+        c1,c2,c3=st.columns(3);c1.metric('xG Casa',f'{xh:.2f}');c2.metric('xG Trasferta',f'{xa:.2f}');c3.metric('xG Totali',f'{xh+xa:.2f}')
+        tab=pd.DataFrame([{'Mercato':k,'Probabilità %':round(v*100,2),'Quota equa':round(fair(v),2)} for k,v in m.items()])
+        st.dataframe(tab,use_container_width=True,hide_index=True)
+        st.subheader('🎯 Risultati esatti');st.dataframe(pd.DataFrame([{'Risultato':f'{h}-{a}','Probabilità %':round(p*100,2)} for h,a,p in top_scores(xh,xa)]),use_container_width=True,hide_index=True)
+        st.caption(f'Campione recente utilizzato: {h}={hn} partite, {a}={an} partite.')
+
+
+def scanner():
+    st.title('💰 Value Scanner')
+    c1,c2,c3=st.columns(3)
+    minv=c1.number_input('Value minimo %',-50.0,100.0,3.0,.5)
+    minp=c2.number_input('Probabilità minima %',1.0,99.0,55.0,1.0)
+    days=c3.number_input('Giorni da analizzare',1,60,14,1)
+    labels={code:f'{country} - {name}' for country,ls in LEAGUES.items() for name,code in ls.items()}
+    selected=st.multiselect('Campionati',list(labels.values()),default=list(labels.values()))
+    codes=[c for c,l in labels.items() if l in selected]
+    c1,c2=st.columns(2)
+    if c1.button('🔄 Aggiorna dati',use_container_width=True):st.cache_data.clear();st.rerun()
+    run=c2.button('🔎 Avvia scansione',type='primary',use_container_width=True)
+    if run:
+        with st.spinner('Scarico fixture e calcolo il modello...'):f,status=load_fixtures();res=scan_future(f,minv,minp,codes,days) if not f.empty else pd.DataFrame()
+        if res.empty:st.warning('Nessuna opportunità trovata con i filtri impostati.');return
+        st.success(f'Trovate {len(res)} opportunità teoriche.')
+        st.dataframe(res,use_container_width=True,hide_index=True)
+        st.download_button('📥 Scarica CSV',res.to_csv(index=False).encode('utf-8-sig'),'value_scanner.csv','text/csv')
+        st.caption('Le quote delle fixture sono quelle pubblicate da Football-Data e non necessariamente sono quote live.')
+
+
+def backtest_page():
+    st.title('🧪 Backtest walk-forward')
+    country=st.selectbox('Nazione',list(LEAGUES),key='bc');name=st.selectbox('Campionato',list(LEAGUES[country]),key='bl');code=LEAGUES[country][name]
+    year=st.selectbox('Stagione',[current_season()-1,current_season()-2,current_season()-3],key='by')
+    market=st.selectbox('Mercato',['Over 0.5','Over 1.5','Over 2.5','Over 3.5','Under 2.5','BTTS','1','X','2','1X','X2','12'])
+    c1,c2=st.columns(2);mp=c1.number_input('Probabilità minima %',1.0,99.0,55.0,1.0);mv=c2.number_input('Value minimo %',-50.0,100.0,3.0,.5)
+    if st.button('▶️ Avvia backtest',type='primary',use_container_width=True):
+        df,status,_=load_league(year,code)
+        if df.empty:st.error(status);return
+        with st.spinner('Calcolo...'):r=backtest(df,market,mp,mv)
+        if r.empty:st.warning('Nessuna operazione trovata.');return
+        bets=len(r);wins=int(r.Vinta.sum());profit=r.Profitto.sum();roi=profit/bets*100
+        a,b,c,d=st.columns(4);a.metric('Scommesse',bets);b.metric('Vinte',wins);c.metric('Perse',bets-wins);d.metric('ROI',f'{roi:.2f}%')
+        st.dataframe(r,use_container_width=True,hide_index=True)
+
+
+def debug():
+    st.title('🛠️ Debug dati')
+    if st.button('🔄 Aggiorna'):st.cache_data.clear();st.rerun()
+    f,status=load_fixtures();st.write('Fixture:',status)
+    if not f.empty:st.dataframe(f.head(30),use_container_width=True,hide_index=True)
+    st.divider()
+    for country,ls in list(LEAGUES.items())[:6]:
+        for name,code in list(ls.items())[:2]:
+            df,s,_=load_league(current_season(),code);st.write(f'{country} - {name} ({code}): {s}, {len(df)} righe')
+
+st.sidebar.title('⚽ Football Analyzer')
+menu=st.sidebar.radio('Menu',['Dashboard','Analisi partita','💰 Value Scanner','🧪 Backtest','🛠️ Debug dati'])
+if menu=='Dashboard':dashboard()
+elif menu=='Analisi partita':analysis()
+elif menu=='💰 Value Scanner':scanner()
+elif menu=='🧪 Backtest':backtest_page()
+elif menu=='🛠️ Debug dati':debug()
+st.divider();st.caption('Fonte dati: Football-Data.co.uk. Modello sperimentale: le probabilità sono stime statistiche e non garanzie di risultato.')
