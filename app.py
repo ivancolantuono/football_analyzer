@@ -2372,7 +2372,7 @@ Adesso quando premi **SCANSIONA TUTTI I CAMPIONATI**, non vedrai più sempliceme
 Vedrai qualcosa del genere:
 
 ```text
-🔎 CONTROLLO SCANSIONE
+st.subheader("🔎 CONTROLLO SCANSIONE")
 
 Fixture             250
 Future               82
